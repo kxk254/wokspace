@@ -5,3 +5,140 @@ docker-compose exec nginx curl -I http://proj3:8000
 // Finally, check the logs from both Nginx and Django containers for any clues:
 docker-compose logs nginx
 docker-compose logs proj3
+
+----.env
+# Django settings
+SECRET_KEY=foo
+DEBUG=True
+DJANGO_ALLOWED_HOSTS=localhost, proj3, 
+
+
+---docker-compose.yml
+services:
+  proj3:
+    environment:
+      - DJANGO_ENV=development
+    volumes:
+      # - static:/p3/static
+      - ./:/p3
+      # - sqllite_db:/p3/db
+    build:
+      context: .
+    expose:
+      - 8000  #expose to gunicorn or nginx
+    restart:
+      always
+
+  nginx:
+    build:
+      context: ./nginx
+    volumes:
+      - ./static:/p3/static     # Link local static files instead of using a volume
+    ports:
+      - 80:80   #host_port : container(nginx)_port
+    depends_on:
+      - proj3
+    restart: always
+
+# volumes:
+#   static: 
+  # sqllite_db:
+
+# the expose directive makes the port available to linked services like nginx, but does not expose it to the host machine
+
+--Dockerfile
+# First stage: build the python app
+FROM python:bullseye AS build
+
+# set working directory
+WORKDIR /p3
+
+# install dependencies
+COPY ./requirements.txt .
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
+
+# copy project source code
+COPY . .
+
+# entrypoint shell scripts to be executed
+COPY ./entrypoint.sh /
+ENTRYPOINT ["sh", "/entrypoint.sh"]
+
+----entrypoint.sh
+#!/bin/sh
+
+# Enable Auto-Reload for Django development server
+if [ "$DJANGO_ENV" = "development" ]; then
+    python manage.py runserver 0.0.0.0:8000
+else
+    # Collect static files in production mode
+    python manage.py collectstatic --no-input
+    
+    # Start Gunicorn for production
+    gunicorn proj3.wsgi:application --bind 0.0.0.0:8000
+fi
+
+
+--------requirements.txt
+asgiref==3.8.1
+Django==5.1.2
+gunicorn==23.0.0
+packaging==24.1
+python-decouple==3.8
+sqlparse==0.5.1
+tzdata==2024.2
+
+
+-----Dockerfile  nginx
+FROM nginx:stable-perl
+
+COPY ./nginx.conf /etc/nginx/conf.d/default.conf
+
+RUN rm -f /var/log/nginx/*
+
+
+---------nginx.conf
+
+server {
+    listen 80;   #nginx listening on port 80
+
+    location / {
+        proxy_pass http://proj3:8000;  #proxy to gunicorn on port 8000
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    location /static/ {
+        alias /p3/static/;   # Serve static files directly from this path
+        autoindex on;  # Optional: to list directory contents (for debugging)
+        expires -1;  # Disable caching
+        add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0";
+    }
+}
+
+-------------------- settings.py
+from decouple import config
+
+SECRET_KEY = config('SECRET_KEY')
+
+# SECURITY WARNING: don't run with debug turned on in production!
+DEBUG = config('DEBUG')
+
+ALLOWED_HOSTS = ["localhost", "proj3"]
+
+STATIC_URL = 'static/'
+
+# Setting to the directory from which you'd like to serve these files
+
+STATIC_ROOT = BASE_DIR / "/p3/static"
+
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'http://0.0.0.0:8000',
+    'http://proj3:8000'
+]
