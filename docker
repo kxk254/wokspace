@@ -1,0 +1,7 @@
+
+// Nginx is actually receiving and forwarding the request properly, access your Nginx container and inspect what it sees:
+docker-compose exec nginx curl -I http://proj3:8000
+
+// Finally, check the logs from both Nginx and Django containers for any clues:
+docker-compose logs nginx
+docker-compose logs proj3
